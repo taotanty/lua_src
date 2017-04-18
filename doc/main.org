@@ -1,0 +1,213 @@
+* main源码分析
+#+BEGIN_SRC C
+int main (int argc, char **argv) {
+  int status, result;
+  lua_State *L = luaL_newstate();  /* create state */
+  if (L == NULL) {
+    l_message(argv[0], "cannot create state: not enough memory");
+    return EXIT_FAILURE;
+  }
+  lua_pushcfunction(L, &pmain);  /* to call 'pmain' in protected mode */
+  lua_pushinteger(L, argc);  /* 1st argument */
+  lua_pushlightuserdata(L, argv); /* 2nd argument */
+  status = lua_pcall(L, 2, 1, 0);  /* do the call */
+  result = lua_toboolean(L, -1);  /* get result */
+  report(L, status);
+  lua_close(L);
+  return (result && status == LUA_OK) ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+#+END_SRC
+
+间接调用pmain，但是利用lua栈去调用
+** lua常用数据结构
+1.CallS
+#+BEGIN_SRC C
+/*
+** Execute a protected call.
+*/
+struct CallS {  /* data to 'f_call' */
+  StkId func;
+  int nresults;
+};
+#+END_SRC
+2.[[file:~/code/lua_src/lua_src/lstate.h::157][lua_Stat]]e, 每个线程的状态状态
+#+BEGIN_SRC C
+/*
+** 'per thread' state
+*/
+struct lua_State {
+  CommonHeader;
+  unsigned short nci;  /* number of items in 'ci' list */
+  lu_byte status;
+  StkId top;  /* first free slot in the stack */
+  global_State *l_G;
+  CallInfo *ci;  /* call info for current function */
+  const Instruction *oldpc;  /* last pc traced */
+  StkId stack_last;  /* last free slot in the stack */
+  StkId stack;  /* stack base */
+  UpVal *openupval;  /* list of open upvalues in this stack */
+  GCObject *gclist;
+  struct lua_State *twups;  /* list of threads with open upvalues */
+  struct lua_longjmp *errorJmp;  /* current error recover point */
+  CallInfo base_ci;  /* CallInfo for first level (C calling Lua) */
+  volatile lua_Hook hook;
+  ptrdiff_t errfunc;  /* current error handling function (stack index) */
+  int stacksize;
+  int basehookcount;
+  int hookcount;
+  unsigned short nny;  /* number of non-yieldable calls in stack */
+  unsigned short nCcalls;  /* number of nested C calls */
+  l_signalT hookmask;
+  lu_byte allowhook;
+};
+#+END_SRC
+3.[[file:~/code/lua_src/lua_src/lobject.h::294][StkI]]d 栈元素,实际上就是利用union结构记录lua 栈元素
+#+BEGIN_SRC C
+typedef TValue *StkId;
+
+
+typedef struct lua_TValue {
+  TValuefields;
+} TValue;
+
+#define TValuefields	Value value_; int tt_
+
+/*
+** Union of all Lua values
+*/
+typedef union Value {
+  GCObject *gc;    /* collectable objects */
+  void *p;         /* light userdata */
+  int b;           /* booleans */
+  lua_CFunction f; /* light C functions */
+  lua_Integer i;   /* integer numbers */
+  lua_Number n;    /* float numbers */
+} Value;
+#+END_SRC
+
+4.[[file:~/code/lua_src/lua_src/lua.h::99][lua_KContext]] 也就是函数C89 的intptr_t 或者intptr_t
+#+BEGIN_SRC C
+/*
+@@ LUA_KCONTEXT is the type of the context ('ctx') for continuation
+** functions.  It must be a numerical type; Lua will use 'intptr_t' if
+** available, otherwise it will use 'ptrdiff_t' (the nearest thing to
+** 'intptr_t' in C89)
+*/
+#define LUA_KCONTEXT	ptrdiff_t
+
+#if !defined(LUA_USE_C89) && defined(__STDC_VERSION__) && \
+    __STDC_VERSION__ >= 199901L
+#include <stdint.h>
+#if defined(INTPTR_MAX)  /* even in C99 this type is optional */
+#undef LUA_KCONTEXT
+#define LUA_KCONTEXT	intptr_t
+#endif
+#endif
+#+END_SRC
+
+5.lua_KFunction
+#+BEGIN_SRC C
+/*
+** Type for continuation functions
+*/
+typedef int (*lua_KFunction) (lua_State *L, int status, lua_KContext ctx);
+#+END_SRC
+
+6.[[file:~/code/lua_src/lua_src/lstate.h::65][CallInfo]] 描述一个调用的具体信息
+#+BEGIN_SRC C
+/*
+** Information about a call.
+** When a thread yields, 'func' is adjusted to pretend that the
+** top function has only the yielded values in its stack; in that
+** case, the actual 'func' value is saved in field 'extra'.
+** When a function calls another with a continuation, 'extra' keeps
+** the function index so that, in case of errors, the continuation
+** function can be called with the correct top.
+*/
+typedef struct CallInfo {
+  StkId func;  /* function index in the stack */
+  StkId	top;  /* top for this function */
+  struct CallInfo *previous, *next;  /* dynamic call link */
+  union {
+    struct {  /* only for Lua functions */
+      StkId base;  /* base for this function */
+      const Instruction *savedpc;
+    } l;
+    struct {  /* only for C functions */
+      lua_KFunction k;  /* continuation in case of yields */
+      ptrdiff_t old_errfunc;
+      lua_KContext ctx;  /* context info. in case of yields */
+    } c;
+  } u;
+  ptrdiff_t extra;
+  short nresults;  /* expected number of results from this function */
+  unsigned short callstatus;
+} CallInfo;
+#+END_SRC
+
+** lua常用接口
+
+1. lua_pcall 在lua.h中[[file:~/code/lua_src/lua_src/lua.h::270][定义]] 但是实际上是用lua_pcallk去实现调用的
+#+BEGIN_SRC C
+LUA_API int lua_pcallk (lua_State *L, int nargs, int nresults, int errfunc,
+                        lua_KContext ctx, lua_KFunction k) {
+  struct CallS c; /**/
+  int status;
+  ptrdiff_t func;
+  lua_lock(L);
+  api_check(L, k == NULL || !isLua(L->ci),
+    "cannot use continuations inside hooks");/*isLua(s) s是否正在运行lua function */
+  api_checknelems(L, nargs+1);
+  api_check(L, L->status == LUA_OK, "cannot do calls on non-normal thread");
+  checkresults(L, nargs, nresults);
+  if (errfunc == 0)
+    func = 0;
+  else {
+    StkId o = index2addr(L, errfunc);
+    api_checkstackindex(L, errfunc, o);
+    func = savestack(L, o);
+  }
+  c.func = L->top - (nargs+1);  /* function to be called */
+  if (k == NULL || L->nny > 0) {  /* no continuation or no yieldable? */
+    c.nresults = nresults;  /* do a 'conventional' protected call */
+    status = luaD_pcall(L, f_call, &c, savestack(L, c.func), func);
+  }
+  else {  /* prepare continuation (call is already protected by 'resume') */
+    CallInfo *ci = L->ci;
+    ci->u.c.k = k;  /* save continuation */
+    ci->u.c.ctx = ctx;  /* save context */
+    /* save information for error recovery */
+    ci->extra = savestack(L, c.func);
+    ci->u.c.old_errfunc = L->errfunc;
+    L->errfunc = func;
+    setoah(ci->callstatus, L->allowhook);  /* save value of 'allowhook' */
+    ci->callstatus |= CIST_YPCALL;  /* function can do error recovery */
+    luaD_call(L, c.func, nresults);  /* do the call */
+    ci->callstatus &= ~CIST_YPCALL;
+    L->errfunc = ci->u.c.old_errfunc;
+    status = LUA_OK;  /* if it is here, there were no errors */
+  }
+  adjustresults(L, nresults);
+  lua_unlock(L);
+  return status;
+}
+#+END_SRC
+上述代码经过各种检查最后回调用luaD_call 这个接口去执行调用
+2.luaD_call, 调用一个函数，其参数以及结果确实通过lua statck传递的
+#+BEGIN_SRC C
+/*
+** Call a function (C or Lua). The function to be called is at *func.
+** The arguments are on the stack, right after the function.
+** When returns, all the results are on the stack, starting at the original
+** function position.
+*/
+void luaD_call (lua_State *L, StkId func, int nResults) {
+  if (++L->nCcalls >= LUAI_MAXCCALLS)
+    stackerror(L);
+  if (!luaD_precall(L, func, nResults))  /* is a Lua function? */
+    luaV_execute(L);  /* call it */
+  L->nCcalls--;
+}
+#+END_SRC
+3.
+4.
