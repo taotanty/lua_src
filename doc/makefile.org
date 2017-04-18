@@ -1,3 +1,4 @@
+
 * 从makefile看lua源码结构
 ** 编译选项
 编译具体内容
@@ -8,20 +9,29 @@ lua需要3个模块来联同编译，CORE_T-lua的核心代码 LUA_T-生成lua�
 $(CORE_T): $(CORE_O) $(AUX_O) $(LIB_O)
 	$(AR) $@ $?
 	$(RANLIB) $@
-CORE_T依赖于CORE_O,AUX_O,LIB_O
+CORE_T 编译目标名liblua.a,依赖于CORE_O,AUX_O,LIB_O
 1. CORE_O
 CORE_O=	lapi.o lcode.o lctype.o ldebug.o ldo.o ldump.o lfunc.o lgc.o llex.o \
 	lmem.o lobject.o lopcodes.o lparser.o lstate.o lstring.o ltable.o \
 	ltm.o lundump.o lvm.o lzio.o ltests.o
-        1)lapi.o 依赖文件 
-        2)
+
+
 2. AUX_O
+luaxlib.o
 3. LIB_O
+LIB_O=	lbaselib.o ldblib.o liolib.o lmathlib.o loslib.o ltablib.o lstrlib.o \
+	lutf8lib.o lbitlib.o loadlib.o lcorolib.o linit.o
+库文件
 *** LUA_T
+lua 可执行文件
 $(LUA_T): $(LUA_O) $(CORE_T)
 $(CC) -o $@ $(
 ) $(LUA_O) $(CORE_T) $(LIBS) $(MYLIBS) $(DL)
+**** lua.o
+lua.h和lua.c
 
 *** LUAC_T
 $(LUAC_T): $(LUAC_O) $(CORE_T)
 $(CC) -o $@ $(MYLDFLAGS) $(LUAC_O) $(CORE_T) $(LIBS) $(MYLIBS)
+
+** lua各文件分析
