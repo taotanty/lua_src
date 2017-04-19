@@ -23,7 +23,7 @@ int main (int argc, char **argv) {
 1.CallS
 #+BEGIN_SRC C
 /*
-** Execute a protected call.
+ ** Execute a protected call.
 */
 struct CallS {  /* data to 'f_call' */
   StkId func;
@@ -33,7 +33,7 @@ struct CallS {  /* data to 'f_call' */
 2.[[file:~/code/lua_src/lua_src/lstate.h::157][lua_Stat]]e, 每个线程的状态状态
 #+BEGIN_SRC C
 /*
-** 'per thread' state
+ ** 'per thread' state
 */
 struct lua_State {
   CommonHeader;
@@ -73,7 +73,7 @@ typedef struct lua_TValue {
 #define TValuefields	Value value_; int tt_
 
 /*
-** Union of all Lua values
+ ** Union of all Lua values
 */
 typedef union Value {
   GCObject *gc;    /* collectable objects */
@@ -89,9 +89,9 @@ typedef union Value {
 #+BEGIN_SRC C
 /*
 @@ LUA_KCONTEXT is the type of the context ('ctx') for continuation
-** functions.  It must be a numerical type; Lua will use 'intptr_t' if
-** available, otherwise it will use 'ptrdiff_t' (the nearest thing to
-** 'intptr_t' in C89)
+ ** functions.  It must be a numerical type; Lua will use 'intptr_t' if
+ ** available, otherwise it will use 'ptrdiff_t' (the nearest thing to
+ ** 'intptr_t' in C89)
 */
 #define LUA_KCONTEXT	ptrdiff_t
 
@@ -108,7 +108,7 @@ typedef union Value {
 5.lua_KFunction
 #+BEGIN_SRC C
 /*
-** Type for continuation functions
+ ** Type for continuation functions
 */
 typedef int (*lua_KFunction) (lua_State *L, int status, lua_KContext ctx);
 #+END_SRC
@@ -116,13 +116,13 @@ typedef int (*lua_KFunction) (lua_State *L, int status, lua_KContext ctx);
 6.[[file:~/code/lua_src/lua_src/lstate.h::65][CallInfo]] 描述一个调用的具体信息
 #+BEGIN_SRC C
 /*
-** Information about a call.
-** When a thread yields, 'func' is adjusted to pretend that the
-** top function has only the yielded values in its stack; in that
-** case, the actual 'func' value is saved in field 'extra'.
-** When a function calls another with a continuation, 'extra' keeps
-** the function index so that, in case of errors, the continuation
-** function can be called with the correct top.
+ ** Information about a call.
+ ** When a thread yields, 'func' is adjusted to pretend that the
+ ** top function has only the yielded values in its stack; in that
+ ** case, the actual 'func' value is saved in field 'extra'.
+ ** When a function calls another with a continuation, 'extra' keeps
+ ** the function index so that, in case of errors, the continuation
+ ** function can be called with the correct top.
 */
 typedef struct CallInfo {
   StkId func;  /* function index in the stack */
@@ -143,6 +143,71 @@ typedef struct CallInfo {
   short nresults;  /* expected number of results from this function */
   unsigned short callstatus;
 } CallInfo;
+#+END_SRC
+7. lua_CFunction
+8. [[file:~/code/lua_src/lua_src/lstate.c::60][LG]]
+#+BEGIN_SRC C
+/*
+ ** Main thread combines a thread state and the global state
+ */
+typedef struct LG {
+  LX l;
+  global_State g;
+} LG;
+#+END_SRC
+9. [[file:~/code/lua_src/lua_src/lstate.c::51][LX]]
+#+BEGIN_SRC C
+/*
+** thread state + extra space
+*/
+typedef struct LX {
+  lu_byte extra_[LUA_EXTRASPACE];
+  lua_State l;
+} LX;
+#+END_SRC
+9. global_State
+#+BEGIN_SRC C
+
+/*
+ ** 'global state', shared by all threads of this state
+ */
+typedef struct global_State {
+  lua_Alloc frealloc;  /* function to reallocate memory */
+  void *ud;         /* auxiliary data to 'frealloc' */
+  l_mem totalbytes;  /* number of bytes currently allocated - GCdebt */
+  l_mem GCdebt;  /* bytes allocated not yet compensated by the collector */
+  lu_mem GCmemtrav;  /* memory traversed by the GC */
+  lu_mem GCestimate;  /* an estimate of the non-garbage memory in use */
+  stringtable strt;  /* hash table for strings */
+  TValue l_registry;
+  unsigned int seed;  /* randomized seed for hashes */
+  lu_byte currentwhite;
+  lu_byte gcstate;  /* state of garbage collector */
+  lu_byte gckind;  /* kind of GC running */
+  lu_byte gcrunning;  /* true if GC is running */
+  GCObject *allgc;  /* list of all collectable objects */
+  GCObject **sweepgc;  /* current position of sweep in list */
+  GCObject *finobj;  /* list of collectable objects with finalizers */
+  GCObject *gray;  /* list of gray objects */
+  GCObject *grayagain;  /* list of objects to be traversed atomically */
+  GCObject *weak;  /* list of tables with weak values */
+  GCObject *ephemeron;  /* list of ephemeron tables (weak keys) */
+  GCObject *allweak;  /* list of all-weak tables */
+  GCObject *tobefnz;  /* list of userdata to be GC */
+  GCObject *fixedgc;  /* list of objects not to be collected */
+  struct lua_State *twups;  /* list of threads with open upvalues */
+  unsigned int gcfinnum;  /* number of finalizers to call in each GC step */
+  int gcpause;  /* size of pause between successive GCs */
+  int gcstepmul;  /* GC 'granularity' */
+  lua_CFunction panic;  /* to be called in unprotected errors */
+  struct lua_State *mainthread;
+  const lua_Number *version;  /* pointer to version number */
+  TString *memerrmsg;  /* memory-error message */
+  TString *tmname[TM_N];  /* array with tag-method names */
+  struct Table *mt[LUA_NUMTAGS];  /* metatables for basic types */
+  TString *strcache[STRCACHE_N][STRCACHE_M];  /* cache for strings in API */
+} global_State;
+
 #+END_SRC
 
 ** lua常用接口
@@ -192,15 +257,16 @@ LUA_API int lua_pcallk (lua_State *L, int nargs, int nresults, int errfunc,
   return status;
 }
 #+END_SRC
-上述代码经过各种检查最后回调用luaD_call 这个接口去执行调用
-2.luaD_call, 调用一个函数，其参数以及结果确实通过lua statck传递的
+
+2. luaD_call, 调用一个函数，其参数以及结果确实通过lua statck传递的
+
 #+BEGIN_SRC C
 /*
-** Call a function (C or Lua). The function to be called is at *func.
-** The arguments are on the stack, right after the function.
-** When returns, all the results are on the stack, starting at the original
-** function position.
-*/
+ ** Call a function (C or Lua). The function to be called is at *func.
+ ** The arguments are on the stack, right after the function.
+ ** When returns, all the results are on the stack, starting at the original
+ ** function position.
+ */
 void luaD_call (lua_State *L, StkId func, int nResults) {
   if (++L->nCcalls >= LUAI_MAXCCALLS)
     stackerror(L);
@@ -209,5 +275,156 @@ void luaD_call (lua_State *L, StkId func, int nResults) {
   L->nCcalls--;
 }
 #+END_SRC
+3. luaD_precall 用来判断是否是lua 函数,以及预先准备调用lua函数
+#+BEGIN_SRC C
+/*
+ ** Prepares a function call: checks the stack, creates a new CallInfo
+ ** entry, fills in the relevant information, calls hook if needed.
+ ** If function is a C function, does the call, too. (Otherwise, leave
+ ** the execution ('luaV_execute') to the caller, to allow stackless
+ ** calls.) Returns true iff function has been executed (C function).
+ */
+int luaD_precall (lua_State *L, StkId func, int nresults) {
+  lua_CFunction f;/*typedef int (*lua_CFunction) (lua_State *L);*/
+  CallInfo *ci;
+  switch (ttype(func)) {
+    case LUA_TCCL:  /* C closure */
+      f = clCvalue(func)->f;
+      goto Cfunc;
+    case LUA_TLCF:  /* light C function */
+      f = fvalue(func);
+     Cfunc: {
+      int n;  /* number of returns */
+      checkstackp(L, LUA_MINSTACK, func);  /* ensure minimum stack size */
+      ci = next_ci(L);  /* now 'enter' new function */
+      ci->nresults = nresults;
+      ci->func = func;
+      ci->top = L->top + LUA_MINSTACK;
+      lua_assert(ci->top <= L->stack_last);
+      ci->callstatus = 0;
+      if (L->hookmask & LUA_MASKCALL)
+        luaD_hook(L, LUA_HOOKCALL, -1);
+      lua_unlock(L);
+      n = (*f)(L);  /* do the actual call */
+      lua_lock(L);
+      api_checknelems(L, n);
+      luaD_poscall(L, ci, L->top - n, n);
+      return 1;
+    }
+    case LUA_TLCL: {  /* Lua function: prepare its call */
+      StkId base;
+      Proto *p = clLvalue(func)->p;
+      int n = cast_int(L->top - func) - 1;  /* number of real arguments */
+      int fsize = p->maxstacksize;  /* frame size */
+      checkstackp(L, fsize, func);
+      if (p->is_vararg)
+        base = adjust_varargs(L, p, n);
+      else {  /* non vararg function */
+        for (; n < p->numparams; n++)
+          setnilvalue(L->top++);  /* complete missing arguments */
+        base = func + 1;
+      }
+      ci = next_ci(L);  /* now 'enter' new function */
+      ci->nresults = nresults;
+      ci->func = func;
+      ci->u.l.base = base;
+      L->top = ci->top = base + fsize;
+      lua_assert(ci->top <= L->stack_last);
+      ci->u.l.savedpc = p->code;  /* starting point */
+      ci->callstatus = CIST_LUA;
+      if (L->hookmask & LUA_MASKCALL)
+        callhook(L, ci);
+      return 0;
+    }
+    default: {  /* not a function */
+      checkstackp(L, 1, func);  /* ensure space for metamethod */
+      tryfuncTM(L, func);  /* try to get '__call' metamethod */
+      return luaD_precall(L, func, nresults);  /* now it must be a function */
+    }
+  }
+#+END_SRC
+4. [[file:~/code/lua_src/lua_src/lauxlib.h][luaL_newstate]]
+#+BEGIN_SRC C
+LUALIB_API lua_State *luaL_newstate (void) {
+  lua_State *L = lua_newstate(l_alloc, NULL);
+  if (L) lua_atpanic(L, &panic);
+  return L;
+}
+
+
+static void *l_alloc (void *ud, void *ptr, size_t osize, size_t nsize) {
+  (void)ud; (void)osize;  /* not used */
+  if (nsize == 0) {
+    free(ptr);
+    return NULL;
+  }
+  else
+    return realloc(ptr, nsize);
+}
+
+LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
+  int i;
+  lua_State *L;
+  global_State *g;
+  LG *l = cast(LG *, (*f)(ud, NULL, LUA_TTHREAD, sizeof(LG)));
+  if (l == NULL) return NULL;
+  L = &l->l.l;
+  g = &l->g;
+  L->next = NULL;
+  L->tt = LUA_TTHREAD;
+  g->currentwhite = bitmask(WHITE0BIT);
+  L->marked = luaC_white(g);
+  preinit_thread(L, g);
+  g->frealloc = f;
+  g->ud = ud;
+  g->mainthread = L;
+  g->seed = makeseed(L);
+  g->gcrunning = 0;  /* no GC while building state */
+  g->GCestimate = 0;
+  g->strt.size = g->strt.nuse = 0;
+  g->strt.hash = NULL;
+  setnilvalue(&g->l_registry);
+  g->panic = NULL;
+  g->version = NULL;
+  g->gcstate = GCSpause;
+  g->gckind = KGC_NORMAL;
+  g->allgc = g->finobj = g->tobefnz = g->fixedgc = NULL;
+  g->sweepgc = NULL;
+  g->gray = g->grayagain = NULL;
+  g->weak = g->ephemeron = g->allweak = NULL;
+  g->twups = NULL;
+  g->totalbytes = sizeof(LG);
+  g->GCdebt = 0;
+  g->gcfinnum = 0;
+  g->gcpause = LUAI_GCPAUSE;
+  g->gcstepmul = LUAI_GCMUL;
+  for (i=0; i < LUA_NUMTAGS; i++) g->mt[i] = NULL;
+  if (luaD_rawrunprotected(L, f_luaopen, NULL) != LUA_OK) {
+    /* memory allocation error: free partial state */
+    close_state(L);
+    L = NULL;
+  }
+  return L;
+}
+#+END_SRC
+  LG *l = cast(LG *, (*f)(ud, NULL, LUA_TTHREAD, sizeof(LG)));
+  这是关键，转换宏如下
+  LG *l=(LG*)((*f)(ud,NULL,LUA_TTHREAD,sizeof(LG))),申请一块LG类型的内存空间
+  将L指向l.l;然后一堆初始化
+
+** lua 工具类型函数或者宏定义
+1. cast, define cast(t, exp)	((t)(exp))
+2.
 3.
 4.
+5.
+6.
+7.
+8.
+9.
+10.
+11.
+12.
+13.
+14.
+15.
