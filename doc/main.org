@@ -1,3 +1,6 @@
+#+TITLE:lua.c 文件分析
+#+AUTHOR:taotanty
+#+OPTIONS: ^:nil
 * main源码分析
 #+BEGIN_SRC C
 int main (int argc, char **argv) {
@@ -30,7 +33,7 @@ struct CallS {  /* data to 'f_call' */
   int nresults;
 };
 #+END_SRC
-2.[[file:~/code/lua_src/lua_src/lstate.h::157][lua_Stat]]e, 每个线程的状态状态
+2.[[file:~/code/lua_src/lua_src/lstate.h::157][lua_State]], 每个线程的状态状态,具体介绍见[[http://blog.csdn.net/chenjiayi_yun/article/details/24304607][博客]]
 #+BEGIN_SRC C
 /*
  ** 'per thread' state
@@ -50,7 +53,7 @@ struct lua_State {
   struct lua_State *twups;  /* list of threads with open upvalues */
   struct lua_longjmp *errorJmp;  /* current error recover point */
   CallInfo base_ci;  /* CallInfo for first level (C calling Lua) */
-  volatile lua_Hook hook;
+  volatnile lua_Hook hook;
   ptrdiff_t errfunc;  /* current error handling function (stack index) */
   int stacksize;
   int basehookcount;
@@ -61,7 +64,7 @@ struct lua_State {
   lu_byte allowhook;
 };
 #+END_SRC
-3.[[file:~/code/lua_src/lua_src/lobject.h::294][StkI]]d 栈元素,实际上就是利用union结构记录lua 栈元素
+3.[[file:~/code/lua_src/lua_src/lobject.h::294][StkId]] 栈元素,实际上就是利用union结构记录lua 栈元素
 #+BEGIN_SRC C
 typedef TValue *StkId;
 
@@ -158,8 +161,8 @@ typedef struct LG {
 9. [[file:~/code/lua_src/lua_src/lstate.c::51][LX]]
 #+BEGIN_SRC C
 /*
-** thread state + extra space
-*/
+ ** thread state + extra space
+ */
 typedef struct LX {
   lu_byte extra_[LUA_EXTRASPACE];
   lua_State l;
@@ -185,7 +188,7 @@ typedef struct global_State {
   lu_byte gcstate;  /* state of garbage collector */
   lu_byte gckind;  /* kind of GC running */
   lu_byte gcrunning;  /* true if GC is running */
-  GCObject *allgc;  /* list of all collectable objects */
+  GCObject *anllgc;  /* list of all collectable objects */
   GCObject **sweepgc;  /* current position of sweep in list */
   GCObject *finobj;  /* list of collectable objects with finalizers */
   GCObject *gray;  /* list of gray objects */
@@ -211,8 +214,8 @@ typedef struct global_State {
 #+END_SRC
 
 ** lua常用接口
-
-1. lua_pcall 在lua.h中[[file:~/code/lua_src/lua_src/lua.h::270][定义]] 但是实际上是用lua_pcallk去实现调用的
+n
+1. lua_pcall 在lua.h中[[file:/Users/a515/code/lua_src/lua_src/lua.h::270][定义]] 但是实际上是用lua_pcallk去实现调用的
 #+BEGIN_SRC C
 LUA_API int lua_pcallk (lua_State *L, int nargs, int nresults, int errfunc,
                         lua_KContext ctx, lua_KFunction k) {
@@ -343,7 +346,7 @@ int luaD_precall (lua_State *L, StkId func, int nresults) {
     }
   }
 #+END_SRC
-4. [[file:~/code/lua_src/lua_src/lauxlib.h][luaL_newstate]]
+4. [[file:/Users/a515/code/lua_src/lua_src/lauxlib.h][luaL_newstate]]
 #+BEGIN_SRC C
 LUALIB_API lua_State *luaL_newstate (void) {
   lua_State *L = lua_newstate(l_alloc, NULL);
