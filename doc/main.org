@@ -33,7 +33,7 @@ struct CallS {  /* data to 'f_call' */
   int nresults;
 };
 #+END_SRC
-2.[[file:~/code/lua_src/lua_src/lstate.h::157][lua_State]], 每个线程的状态状态,具体介绍见[[http://blog.csdn.net/chenjiayi_yun/article/details/24304607][博客]]
+2.[[file:~/code/lua_src/lua_src/lstate.h::157][lua_State]], 每个线程的状态,具体介绍见[[http://blog.csdn.net/chenjiayi_yun/article/details/24304607][博客]]
 #+BEGIN_SRC C
 /*
  ** 'per thread' state
@@ -214,139 +214,7 @@ typedef struct global_State {
 #+END_SRC
 
 ** lua常用接口
-n
-1. lua_pcall 在lua.h中[[file:/Users/a515/code/lua_src/lua_src/lua.h::270][定义]] 但是实际上是用lua_pcallk去实现调用的
-#+BEGIN_SRC C
-LUA_API int lua_pcallk (lua_State *L, int nargs, int nresults, int errfunc,
-                        lua_KContext ctx, lua_KFunction k) {
-  struct CallS c; /**/
-  int status;
-  ptrdiff_t func;
-  lua_lock(L);
-  api_check(L, k == NULL || !isLua(L->ci),
-    "cannot use continuations inside hooks");/*isLua(s) s是否正在运行lua function */
-  api_checknelems(L, nargs+1);
-  api_check(L, L->status == LUA_OK, "cannot do calls on non-normal thread");
-  checkresults(L, nargs, nresults);
-  if (errfunc == 0)
-    func = 0;
-  else {
-    StkId o = index2addr(L, errfunc);
-    api_checkstackindex(L, errfunc, o);
-    func = savestack(L, o);
-  }
-  c.func = L->top - (nargs+1);  /* function to be called */
-  if (k == NULL || L->nny > 0) {  /* no continuation or no yieldable? */
-    c.nresults = nresults;  /* do a 'conventional' protected call */
-    status = luaD_pcall(L, f_call, &c, savestack(L, c.func), func);
-  }
-  else {  /* prepare continuation (call is already protected by 'resume') */
-    CallInfo *ci = L->ci;
-    ci->u.c.k = k;  /* save continuation */
-    ci->u.c.ctx = ctx;  /* save context */
-    /* save information for error recovery */
-    ci->extra = savestack(L, c.func);
-    ci->u.c.old_errfunc = L->errfunc;
-    L->errfunc = func;
-    setoah(ci->callstatus, L->allowhook);  /* save value of 'allowhook' */
-    ci->callstatus |= CIST_YPCALL;  /* function can do error recovery */
-    luaD_call(L, c.func, nresults);  /* do the call */
-    ci->callstatus &= ~CIST_YPCALL;
-    L->errfunc = ci->u.c.old_errfunc;
-    status = LUA_OK;  /* if it is here, there were no errors */
-  }
-  adjustresults(L, nresults);
-  lua_unlock(L);
-  return status;
-}
-#+END_SRC
-
-2. luaD_call, 调用一个函数，其参数以及结果确实通过lua statck传递的
-
-#+BEGIN_SRC C
-/*
- ** Call a function (C or Lua). The function to be called is at *func.
- ** The arguments are on the stack, right after the function.
- ** When returns, all the results are on the stack, starting at the original
- ** function position.
- */
-void luaD_call (lua_State *L, StkId func, int nResults) {
-  if (++L->nCcalls >= LUAI_MAXCCALLS)
-    stackerror(L);
-  if (!luaD_precall(L, func, nResults))  /* is a Lua function? */
-    luaV_execute(L);  /* call it */
-  L->nCcalls--;
-}
-#+END_SRC
-3. luaD_precall 用来判断是否是lua 函数,以及预先准备调用lua函数
-#+BEGIN_SRC C
-/*
- ** Prepares a function call: checks the stack, creates a new CallInfo
- ** entry, fills in the relevant information, calls hook if needed.
- ** If function is a C function, does the call, too. (Otherwise, leave
- ** the execution ('luaV_execute') to the caller, to allow stackless
- ** calls.) Returns true iff function has been executed (C function).
- */
-int luaD_precall (lua_State *L, StkId func, int nresults) {
-  lua_CFunction f;/*typedef int (*lua_CFunction) (lua_State *L);*/
-  CallInfo *ci;
-  switch (ttype(func)) {
-    case LUA_TCCL:  /* C closure */
-      f = clCvalue(func)->f;
-      goto Cfunc;
-    case LUA_TLCF:  /* light C function */
-      f = fvalue(func);
-     Cfunc: {
-      int n;  /* number of returns */
-      checkstackp(L, LUA_MINSTACK, func);  /* ensure minimum stack size */
-      ci = next_ci(L);  /* now 'enter' new function */
-      ci->nresults = nresults;
-      ci->func = func;
-      ci->top = L->top + LUA_MINSTACK;
-      lua_assert(ci->top <= L->stack_last);
-      ci->callstatus = 0;
-      if (L->hookmask & LUA_MASKCALL)
-        luaD_hook(L, LUA_HOOKCALL, -1);
-      lua_unlock(L);
-      n = (*f)(L);  /* do the actual call */
-      lua_lock(L);
-      api_checknelems(L, n);
-      luaD_poscall(L, ci, L->top - n, n);
-      return 1;
-    }
-    case LUA_TLCL: {  /* Lua function: prepare its call */
-      StkId base;
-      Proto *p = clLvalue(func)->p;
-      int n = cast_int(L->top - func) - 1;  /* number of real arguments */
-      int fsize = p->maxstacksize;  /* frame size */
-      checkstackp(L, fsize, func);
-      if (p->is_vararg)
-        base = adjust_varargs(L, p, n);
-      else {  /* non vararg function */
-        for (; n < p->numparams; n++)
-          setnilvalue(L->top++);  /* complete missing arguments */
-        base = func + 1;
-      }
-      ci = next_ci(L);  /* now 'enter' new function */
-      ci->nresults = nresults;
-      ci->func = func;
-      ci->u.l.base = base;
-      L->top = ci->top = base + fsize;
-      lua_assert(ci->top <= L->stack_last);
-      ci->u.l.savedpc = p->code;  /* starting point */
-      ci->callstatus = CIST_LUA;
-      if (L->hookmask & LUA_MASKCALL)
-        callhook(L, ci);
-      return 0;
-    }
-    default: {  /* not a function */
-      checkstackp(L, 1, func);  /* ensure space for metamethod */
-      tryfuncTM(L, func);  /* try to get '__call' metamethod */
-      return luaD_precall(L, func, nresults);  /* now it must be a function */
-    }
-  }
-#+END_SRC
-4. [[file:/Users/a515/code/lua_src/lua_src/lauxlib.h][luaL_newstate]]
+1. [[file:/Users/a515/code/lua_src/lua_src/lauxlib.h][luaL_newstate]]
 #+BEGIN_SRC C
 LUALIB_API lua_State *luaL_newstate (void) {
   lua_State *L = lua_newstate(l_alloc, NULL);
@@ -414,6 +282,229 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
   这是关键，转换宏如下
   LG *l=(LG*)((*f)(ud,NULL,LUA_TTHREAD,sizeof(LG))),申请一块LG类型的内存空间
   将L指向l.l;然后一堆初始化
+
+2. lua_pcall 在lua.h中[[file:/Users/a515/code/lua_src/lua_src/lua.h::270][定义]] 但是实际上是用lua_pcallk去实现调用的
+#+BEGIN_SRC C
+LUA_API int lua_pcallk (lua_State *L, int nargs, int nresults, int errfunc,
+                        lua_KContext ctx, lua_KFunction k) {
+  struct CallS c; /**/
+  int status;
+  ptrdiff_t func;
+  lua_lock(L);
+  api_check(L, k == NULL || !isLua(L->ci),
+    "cannot use continuations inside hooks");/*isLua(s) s是否正在运行lua function */
+  api_checknelems(L, nargs+1);
+  api_check(L, L->status == LUA_OK, "cannot do calls on non-normal thread");
+  checkresults(L, nargs, nresults);
+  if (errfunc == 0)
+    func = 0;
+  else {
+    StkId o = index2addr(L, errfunc);
+    api_checkstackindex(L, errfunc, o);
+    func = savestack(L, o);
+  }
+  c.func = L->top - (nargs+1);  /* function to be called */
+  if (k == NULL || L->nny > 0) {  /* no continuation or no yieldable? */
+    c.nresults = nresults;  /* do a 'conventional' protected call */
+    status = luaD_pcall(L, f_call, &c, savestack(L, c.func), func);
+  }
+  else {  /* prepare continuation (call is already protected by 'resume') */
+    CallInfo *ci = L->ci;
+    ci->u.c.k = k;  /* save continuation */
+    ci->u.c.ctx = ctx;  /* save context */
+    /* save information for error recovery */
+    ci->extra = savestack(L, c.func);
+    ci->u.c.old_errfunc = L->errfunc;
+    L->errfunc = func;
+    setoah(ci->callstatus, L->allowhook);  /* save value of 'allowhook' */
+    ci->callstatus |= CIST_YPCALL;  /* function can do error recovery */
+    luaD_call(L, c.func, nresults);  /* do the call */
+    ci->callstatus &= ~CIST_YPCALL;
+    L->errfunc = ci->u.c.old_errfunc;
+    status = LUA_OK;  /* if it is here, there were no errors */
+  }
+  adjustresults(L, nresults);
+  lua_unlock(L);
+  return status;
+}
+#+END_SRC
+
+3. luaD_call, 调用一个函数，其参数以及结果确实通过lua statck传递的
+
+#+BEGIN_SRC C
+/*
+ ** Call a function (C or Lua). The function to be called is at *func.
+ ** The arguments are on the stack, right after the function.
+ ** When returns, all the results are on the stack, starting at the original
+ ** function position.
+ */
+void luaD_call (lua_State *L, StkId func, int nResults) {
+  if (++L->nCcalls >= LUAI_MAXCCALLS)
+    stackerror(L);
+  if (!luaD_precall(L, func, nResults))  /* is a Lua function? */
+    luaV_execute(L);  /* call it */
+  L->nCcalls--;
+}
+#+END_SRC
+4. luaD_precall 用来判断是否是lua 函数,以及预先准备调用lua函数
+#+BEGIN_SRC C
+/*
+ ** Prepares a function call: checks the stack, creates a new CallInfo
+ ** entry, fills in the relevant information, calls hook if needed.
+ ** If function is a C function, does the call, too. (Otherwise, leave
+ ** the execution ('luaV_execute') to the caller, to allow stackless
+ ** calls.) Returns true iff function has been executed (C function).
+ */
+int luaD_precall (lua_State *L, StkId func, int nresults) {
+  lua_CFunction f;/*typedef int (*lua_CFunction) (lua_State *L);*/
+  CallInfo *ci;
+  switch (ttype(func)) {
+    case LUA_TCCL:  /* C closure */
+      f = clCvalue(func)->f;
+      goto Cfunc;
+    case LUA_TLCF:  /* light C function */
+      f = fvalue(func);
+     Cfunc: {
+      int n;  /* number of returns */
+      checkstackp(L, LUA_MINSTACK, func);  /* ensure minimum stack size */
+      ci = next_ci(L);  /* now 'enter' new function */
+      ci->nresults = nresults;
+      ci->func = func;
+      ci->top = L->top + LUA_MINSTACK;
+      lua_assert(ci->top <= L->stack_last);
+      ci->callstatus = 0;
+      if (L->hookmask & LUA_MASKCALL)
+        luaD_hook(L, LUA_HOOKCALL, -1);
+      lua_unlock(L);
+      n = (*f)(L);  /* do the actual call */
+      lua_lock(L);
+      api_checknelems(L, n);
+      luaD_poscall(L, ci, L->top - n, n);
+      return 1;
+    }
+    case LUA_TLCL: {  /* Lua function: prepare its call */
+      StkId base;
+      Proto *p = clLvalue(func)->p;
+      int n = cast_int(L->top - func) - 1;  /* number of real arguments */
+      int fsize = p->maxstacksize;  /* frame size */
+      checkstackp(L, fsize, func);
+      if (p->is_vararg)
+        base = adjust_varargs(L, p, n);
+      else {  /* non vararg function */
+        for (; n < p->numparams; n++)
+          setnilvalue(L->top++);  /* complete missing arguments */
+        base = func + 1;
+      }
+      ci = next_ci(L);  /* now 'enter' new function */
+      ci->nresults = nresults;
+      ci->func = func;
+      ci->u.l.base = base;
+      L->top = ci->top = base + fsize;
+      lua_assert(ci->top <= L->stack_last);
+      ci->u.l.savedpc = p->code;  /* starting point */
+      ci->callstatus = CIST_LUA;
+      if (L->hookmask & LUA_MASKCALL)
+        callhook(L, ci);
+      return 0;
+    }
+    default: {  /* not a function */
+      checkstackp(L, 1, func);  /* ensure space for metamethod */
+      tryfuncTM(L, func);  /* try to get '__call' metamethod */
+      return luaD_precall(L, func, nresults);  /* now it must be a function */
+    }
+  }
+#+END_SRC
+
+** pmain 逻辑流程
+#+BEGIN_SRC C
+/*
+ ** Main body of stand-alone interpreter (to be called in protected mode).
+ ** Reads the options and handles them all.
+ */
+static int pmain (lua_State *L) {
+  int argc = (int)lua_tointeger(L, 1);
+  char **argv = (char **)lua_touserdata(L, 2);
+  int script;
+  int args = collectargs(argv, &script);
+  luaL_checkversion(L);  /* check that interpreter has correct version */
+  if (argv[0] && argv[0][0]) progname = argv[0];
+  if (args == has_error) {  /* bad arg? */
+    print_usage(argv[script]);  /* 'script' has index of bad arg. */
+    return 0;
+  }
+  if (args & has_v)  /* option '-v'? */
+    print_version();
+  if (args & has_E) {  /* option '-E'? */
+    lua_pushboolean(L, 1);  /* signal for libraries to ignore env. vars. */
+    lua_setfield(L, LUA_REGISTRYINDEX, "LUA_NOENV");
+  }
+  luaL_openlibs(L);  /* open standard libraries */
+  createargtable(L, argv, argc, script);  /* create table 'arg' */
+  if (!(args & has_E)) {  /* no option '-E'? */
+    if (handle_luainit(L) != LUA_OK)  /* run LUA_INIT */
+      return 0;  /* error running LUA_INIT */
+  }
+  if (!runargs(L, argv, script))  /* execute arguments -e and -l */
+    return 0;  /* something failed */
+  if (script < argc &&  /* execute main script (if there is one) */
+      handle_script(L, argv + script) != LUA_OK)
+    return 0;
+  if (args & has_i)  /* -i option? */
+    doREPL(L);  /* do read-eval-print loop */
+  else if (script == argc && !(args & (has_e | has_v))) {  /* no arguments? */
+    if (lua_stdin_is_tty()) {  /* running in interactive mode? */
+      print_version();
+      doREPL(L);  /* do read-eval-print loop */
+    }
+    else dofile(L, NULL);  /* executes stdin as a file */
+  }
+  lua_pushboolean(L, 1);  /* signal no errors */
+  return 1;
+}
+#+END_SRC
+pmain的功能是检查传入的参数，并运行个参数对应的效果，同时运行目标脚本，见函数handle_script
+
+*** handle_script
+#+BEGIN_SRC C
+  if (script < argc &&  /* execute main script (if there is one) */
+      handle_script(L, argv + script) != LUA_OK)
+
+static int handle_script (lua_State *L, char **argv) {
+  int status;
+  const char *fname = argv[0];
+  if (strcmp(fname, "-") == 0 && strcmp(argv[-1], "--") != 0)
+    fname = NULL;  /* stdin */
+  status = luaL_loadfile(L, fname);
+  if (status == LUA_OK) {
+    int n = pushargs(L);  /* push arguments to script */
+    status = docall(L, n, LUA_MULTRET);
+  }
+  return report(L, status);
+}
+#+END_SRC
+
+载入脚本文件，然后将参数传入脚本并运行docall去执行脚本
+
+**** docall
+#+BEGIN_SRC C
+/*
+** Interface to 'lua_pcall', which sets appropriate message function
+** and C-signal handler. Used to run all chunks.
+*/
+static int docall (lua_State *L, int narg, int nres) {
+  int status;
+  int base = lua_gettop(L) - narg;  /* function index */
+  lua_pushcfunction(L, msghandler);  /* push message handler */
+  lua_insert(L, base);  /* put it under function and args */
+  globalL = L;  /* to be available to 'laction' */
+  signal(SIGINT, laction);  /* set C-signal handler */
+  status = lua_pcall(L, narg, nres, base);
+  signal(SIGINT, SIG_DFL); /* reset C-signal handler */
+  lua_remove(L, base);  /* remove message handler from the stack */
+  return status;
+}
+#+END_SRC
+
 
 ** lua 工具类型函数或者宏定义
 1. cast, define cast(t, exp)	((t)(exp))
