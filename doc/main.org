@@ -416,6 +416,8 @@ int luaD_precall (lua_State *L, StkId func, int nresults) {
 #+END_SRC
 
 ** pmain 逻辑流程
+为什么lua 把主要逻辑封装到pmain中？见[[http://blog.codingnow.com/2015/05/lua_c_api.html][博客]]
+简述一下，因为lua的异常都是有lua_pcall或者lua_resume捕获的，这样的封装便于程序捕获主逻辑的异常
 #+BEGIN_SRC C
 /*
  ** Main body of stand-alone interpreter (to be called in protected mode).
@@ -504,6 +506,7 @@ static int docall (lua_State *L, int narg, int nres) {
   return status;
 }
 #+END_SRC
+
 
 
 ** lua 工具类型函数或者宏定义
