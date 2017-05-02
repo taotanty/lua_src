@@ -35,3 +35,21 @@ $(LUAC_T): $(LUAC_O) $(CORE_T)
 $(CC) -o $@ $(MYLDFLAGS) $(LUAC_O) $(CORE_T) $(LIBS) $(MYLIBS)
 
 ** lua各文件分析
+| lua虚拟机opcode | lvm.c     | luaV |
+| lua_state       | lstate.c  | luaE |
+| 函数运行        | ldo.c     | luaD |
+| function        | lfunc.c   | luaF |
+| table           | ltable.c  | luaH |
+| string          | lstring.c | luaS |
+| Lua object      | lobject.c | luaO |
+| meta table      | ltm.c     | luaT |
+| 内存管理        | lmem.c    | luaM |
+| 带缓冲的流处理  | Lzio.c    | luaZ |
+| 垃圾回收        | lgc.c     | luaC |
+| 词法分析        | lparser.c | luaY |
+| 语法分析        | llex.c    | luaX |
+| 生成虚拟机理解的数据 | lcode.c   | luaK |
+| 预编译               | ldump.c   | luaU |
+| 反预编译             | lundump.c | luaU |
+
+
