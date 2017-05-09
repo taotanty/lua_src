@@ -1,0 +1,141 @@
+#+TITLE:lua table
+#+AUTHOR:taotanty
+#+OPTIONS:^:nil
+
+* 数据结构
+#+BEGIN_SRC C
+typedef struct Table {
+  CommonHeader;
+  lu_byte flags;  /* 1<<p means tagmethod(p) is not present */
+  lu_byte lsizenode;  /* log2 of size of 'node' array */
+  unsigned int sizearray;  /* size of 'array' array */
+  TValue *array;  /* array part */
+  Node *node;
+  Node *lastfree;  /* any free position is before this position */
+  struct Table *metatable;
+  GCObject *gclist;
+} Table;
+
+
+typedef struct Node {
+  TValue i_val;
+  TKey i_key;
+} Node;
+
+
+typedef union TKey {
+  struct {
+    TValuefields;
+    int next;  /* for chaining (offset for next node) */
+  } nk;
+  TValue tvk;
+} TKey;
+/*lobejct.h:472*/
+#+END_SRC
+
+
+从代码中可以看出来放，Table的数组部分和hash 部分分开了,数组部分仅仅是一个数组长度int sizearray加上一个数组TValue* array;；
+而哈希部分,通过Node 指向的内存来实现的，但是注意下，这里指向的内存是TValue and {TValuefields ,int or TValue},仅仅存储了哈希值，
+那么哈希对应值去哪里了，暂时未知。
+纵观Table的整个结构,它包含了3大块内存，TValue* 数组,存储哈希表的Node链表,以及存储元表的Table链表。
+
+* 初始化
+上面提出的问题，哈希对应的值存在哪里，我想通过创建一个Table 应该可以看出来.打开ltable.h和ltable.c，
+我在ltable.h 找到了创建Table的函数
+#+BEGIN_SRC C
+LUAI_FUNC Table *luaH_new (lua_State *L);
+
+
+Table *luaH_new (lua_State *L) {
+  GCObject *o = luaC_newobj(L, LUA_TTABLE, sizeof(Table));
+  Table *t = gco2t(o);
+  t->metatable = NULL;
+  t->flags = cast_byte(~0);
+  t->array = NULL;
+  t->sizearray = 0;
+  setnodevector(L, t, 0);
+  return t;
+}
+
+#+END_SRC
+
+可以看到Table 创建的时候,metatable 为NULL,array 为NULL,哈希表就复杂了,利用函数setnodevector(L,t,0)
+#+BEGIN_SRC C
+static void setnodevector (lua_State *L, Table *t, unsigned int size) {
+  if (size == 0) {  /* no elements to hash part? */
+    t->node = cast(Node *, dummynode);  /* use common 'dummynode' */
+    t->lsizenode = 0;
+    t->lastfree = NULL;  /* signal that it is using dummy node */
+  }
+  else {
+    int i;
+    int lsize = luaO_ceillog2(size);
+    if (lsize > MAXHBITS)
+      luaG_runerror(L, "table overflow");
+    size = twoto(lsize);
+    t->node = luaM_newvector(L, size, Node);
+    for (i = 0; i < (int)size; i++) {
+      Node *n = gnode(t, i);
+      gnext(n) = 0;
+      setnilvalue(wgkey(n));
+      setnilvalue(gval(n));
+    }
+    t->lsizenode = cast_byte(lsize);
+    t->lastfree = gnode(t, size);  /* all positions are free */
+  }
+}
+#+END_SRC
+
+1. 创建hash数据的表
+直接使用静态常量Node ，不可更改，线程安全
+#+BEGIN_SRC C
+#define dummynode		(&dummynode_)
+
+static const Node dummynode_ = {
+  {NILCONSTANT},  /* value */
+  {{NILCONSTANT, 0}}  /* key */
+};
+#+END_SRC
+
+2. 创建有哈希数据的表
+
+#+BEGIN_SRC C
+
+/*
+** Computes ceil(log2(x))
+*/
+int luaO_ceillog2 (unsigned int x) {
+  static const lu_byte log_2[256] = {  /* log_2[i] = ceil(log2(i - 1)) */
+    0,1,2,2,3,3,3,3,4,4,4,4,4,4,4,4,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
+    6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
+    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+    8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,
+    8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,
+    8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,
+    8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8
+  };
+  int l = 0;
+  x--;
+  while (x >= 256) { l += 8; x >>= 8; }
+  return l + log_2[x];
+}
+#+END_SRC
+
+
+#+BEGIN_SRC C
+#define twoto(x)	(1<<(x))
+#define sizenode(t)	(twoto((t)->lsizenode))
+#+END_SRC
+
+* 释放
+#+BEGIN_SRC C
+LUAI_FUNC void luaH_free (lua_State *L, Table *t);
+
+void luaH_free (lua_State *L, Table *t) {
+  if (!isdummy(t))
+    luaM_freearray(L, t->node, cast(size_t, sizenode(t)));
+  luaM_freearray(L, t->array, t->sizearray);
+  luaM_free(L, t);
+}
+#+END_SRC
