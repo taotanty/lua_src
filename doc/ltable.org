@@ -39,9 +39,48 @@ typedef union TKey {
 那么哈希对应值去哪里了，暂时未知。
 纵观Table的整个结构,它包含了3大块内存，TValue* 数组,存储哈希表的Node链表,以及存储元表的Table链表。
 
-* 初始化
+* 创建表
 上面提出的问题，哈希对应的值存在哪里，我想通过创建一个Table 应该可以看出来.打开ltable.h和ltable.c，
+
 我在ltable.h 找到了创建Table的函数
+
+#+BEGIN_SRC C
+LUA_API void lua_createtable (lua_State *L, int narray, int nrec) {
+  Table *t;
+  lua_lock(L);
+  t = luaH_new(L);
+  sethvalue(L, L->top, t);
+  api_incr_top(L);
+  if (narray > 0 || nrec > 0)
+    luaH_resize(L, t, narray, nrec);
+  luaC_checkGC(L);
+  lua_unlock(L);
+}
+#+END_SRC
+
+逻辑层面上，就是创建一个空表，然后判断参数 数组长度或者哈希长度>0,是的话重新设置表大小。
+
+#+begin_src dot :file createtable.png :cmdline -Kdot -Tpng
+digraph G{
+    size = "6, 6";//图片大小
+    lua_createtable[shape=parallelogram,label="L,array,nrec"];
+    lua_createtable->lua_lock;
+    lua_lock->luaH_new;
+    luaH_new->sethvalue;
+    sethvalue->api_incr_top;
+    api_incr_top->lua_resize[label="narray>0\n or nrec>0"];
+    lua_resize->luaC_checkGC;
+    api_incr_top->luaC_checkGC;
+    luaC_checkGC->lua_unlock;
+    end[shape=box];
+    lua_unlock->end;
+}
+#+end_src
+
+#+RESULTS:
+[[file:createtable.png]]
+
+** luaH_new
 #+BEGIN_SRC C
 LUAI_FUNC Table *luaH_new (lua_State *L);
 
@@ -86,7 +125,7 @@ static void setnodevector (lua_State *L, Table *t, unsigned int size) {
 }
 #+END_SRC
 
-1. 创建hash数据的表
+1. 创建无hash数据的表
 直接使用静态常量Node ，不可更改，线程安全
 #+BEGIN_SRC C
 #define dummynode		(&dummynode_)
@@ -128,47 +167,8 @@ int luaO_ceillog2 (unsigned int x) {
 #define sizenode(t)	(twoto((t)->lsizenode))
 #+END_SRC
 
- 创建
-#+BEGIN_SRC C
-LUA_API void lua_createtable (lua_State *L, int narray, int nrec) {
-  Table *t;
-  lua_lock(L);
-  t = luaH_new(L);
-  sethvalue(L, L->top, t);
-  api_incr_top(L);
-  if (narray > 0 || nrec > 0)
-    luaH_resize(L, t, narray, nrec);
-  luaC_checkGC(L);
-  lua_unlock(L);
-}
-#+END_SRC
 
-逻辑层面上，就是创建一个空表，然后判断参数 数组长度或者哈希长度>0,是的话重新设置表大小。
-
-
-#+begin_src dot :file createtable.png :cmdline -Kdot -Tpng
-/*/
-digraph G{
-    size = "6, 6";//图片大小
-    lua_createtable[shape=parallelogram,label="L,array,nrec"];
-    lua_createtable->lua_lock;
-    lua_lock->luaH_new;
-    luaH_new->sethvalue;
-    sethvalue->api_incr_top;
-    api_incr_top->lua_resize[label="narray>0\n or nrec>0"];
-    lua_resize->luaC_checkGC;
-    api_incr_top->luaC_checkGC;
-    luaC_checkGC->lua_unlock;
-    end[shape=box];
-    lua_unlock->end;
-}
-#+end_src
-
-#+RESULTS:
-[[file:createtable.png]]
-
-
-
+** lua_resize
 #+BEGIN_SRC C
 void luaH_resize (lua_State *L, Table *t, unsigned int nasize,
                                           unsigned int nhsize) {
@@ -203,9 +203,63 @@ void luaH_resize (lua_State *L, Table *t, unsigned int nasize,
   if (oldhsize > 0)  /* not the dummy node? */
     luaM_freearray(L, nold, cast(size_t, oldhsize)); /* free old hash */
 }
+
+
+#define gnode(t,i)	(&(t)->node[i])
+#define gval(n)		(&(n)->i_val)
+#define gnext(n)	((n)->i_key.nk.next)
+/* 'const' to avoid wrong writings that can mess up field 'next' */
+#define gkey(n)		cast(const TValue*, (&(n)->i_key.tvk))
+
+
+#define setobj(L,obj1,obj2) \
+    { TValue *io1=(obj1); *io1 = *(obj2); \
+      (void)L; checkliveness(L,io1); }
+
+
+/*
+ ** beware: when using this function you probably need to check a GC
+ ** barrier and invalidate the TM cache.
+*/
+TValue *luaH_set (lua_State *L, Table *t, const TValue *key) {
+  const TValue *p = luaH_get(t, key);
+  if (p != luaO_nilobject)
+    return cast(TValue *, p);
+  else return luaH_newkey(L, t, key);
+}
 #+END_SRC
 
+#+begin_src dot :file luaH_resize.png :cmdline -Kdot -Tpng
+digraph G{
+size="6,7";
+luaH_resize[shape=parallelogram,label="L,t,nasize\nnhsize"]
+luaH_resize->save_old;
+judge1[shape=diamond,label="nasize<oldesize"];
+save_old->judge1;
+resetArrayNode[label="重新设置数组部分"];
+judge1->resetArrayNode[label="Y"];
+resetArrayNode->setnodevector;
+judge1->setnodevector[label="N"];
+judge2[shape=diamond,label="nasize<oldsize\n 需要缩小数组部分?"];
+setnodevector->judge2;
+judge2->shrink_array[label="Y"];
+reinsert_hash[label="重新插入hash 部分,原因未知"];
+shrink_array->reinsert_hash;
+judge2->reinsert_hash[label="N"];
+reinsert_hash->judge3;
+judge3[shape=diamond,label="旧表是否为dummy"];
+judge3->free_oldhash[label="N"];
+free_oldhash->end;
+end[shape=hexagon];
+judge3->end[label="Y"];
+}
+#+end_src
 
+#+RESULTS:
+[[file:luaH_resize]].png
+
+
+初始化来说，就是luaH_new 一个空表；如果创建一个非空表就是在前面的基础上luaH_resize设定空表的值。
 
 * 释放
 #+BEGIN_SRC C
