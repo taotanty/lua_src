@@ -42,7 +42,7 @@ typedef union TKey {
 * 创建表
 上面提出的问题，哈希对应的值存在哪里，我想通过创建一个Table 应该可以看出来.打开ltable.h和ltable.c，
 
-我在ltable.h 找到了创建Table的函数
+我在lap.c 找到了创建Table的函数
 
 #+BEGIN_SRC C
 LUA_API void lua_createtable (lua_State *L, int narray, int nrec) {
@@ -112,12 +112,12 @@ static void setnodevector (lua_State *L, Table *t, unsigned int size) {
     if (lsize > MAXHBITS)
       luaG_runerror(L, "table overflow");
     size = twoto(lsize);
-    t->node = luaM_newvector(L, size, Node);
-    for (i = 0; i < (int)size; i++) {
+    t->node = luaM_newvector(L, size, Node);//new  一个大小size，类型Node 的vector
+    for (i = 0; i < (int)size; i++) {//对vector 进行初始化
       Node *n = gnode(t, i);
-      gnext(n) = 0;
-      setnilvalue(wgkey(n));
-      setnilvalue(gval(n));
+      gnext(n) = 0; //n->i_key.nk.next=0
+      setnilvalue(wgkey(n));//&(n)->i_key.nk={NULL}
+      setnilvalue(gval(n));//&(n)->i_val={NULL}
     }
     t->lsizenode = cast_byte(lsize);
     t->lastfree = gnode(t, size);  /* all positions are free */
@@ -167,8 +167,10 @@ int luaO_ceillog2 (unsigned int x) {
 #define sizenode(t)	(twoto((t)->lsizenode))
 #+END_SRC
 
+设置表size，new 一个size 大小的Node 数组,,将hash 表Node* 初始化为空（{NULL}）
 
 ** lua_resize
+经过new之后产生的其实是一个dummynode,再用lua_resize 就是填充表内存
 #+BEGIN_SRC C
 void luaH_resize (lua_State *L, Table *t, unsigned int nasize,
                                           unsigned int nhsize) {
@@ -259,7 +261,13 @@ judge3->end[label="Y"];
 [[file:luaH_resize]].png
 
 
-初始化来说，就是luaH_new 一个空表；如果创建一个非空表就是在前面的基础上luaH_resize设定空表的值。
+** 小结
+luaH_createtable，就是luaH_new 使得tabale 指向dummynode；在luaH_resize 设置内存大小(利用
+函setarrayvector创建并初始化数组部分，setnodevec创建并初始化hash部分)
+创建一个非空表就是在前面的基础上luaH_resize设定空表的值。
+遗留的问题还是存在，值怎么填充的？继续看下去.
+
+* luaH_newkey
 
 * 释放
 #+BEGIN_SRC C
